@@ -5,7 +5,7 @@ Import("env")
 
 board = env.BoardConfig()
 
-print "++++++++++++++++++++++++++++++prepare upload start++++++++++++++++++++++++++++++\n"
+print("============================== Prepare upload start ============================")
 
 upload_protocol = env.subst("$UPLOAD_PROTOCOL")
 if upload_protocol.startswith("jlink"):
@@ -24,6 +24,7 @@ if upload_protocol.startswith("jlink"):
         with open(script_path, "w") as fp:
             fp.write("\n".join(commands))
         return script_path
+
     env.Replace(
         __jlink_cmd_script=_jlink_cmd_script,
         UPLOADER="JLink.exe" if system() == "Windows" else "JLinkExe",
@@ -36,5 +37,6 @@ if upload_protocol.startswith("jlink"):
         UPLOADCMD='$UPLOADER $UPLOADERFLAGS -CommanderScript "${__jlink_cmd_script(__env__, SOURCE)}"'
     )
 elif upload_protocol.startswith("stlink"):
-    print "st is not supprted now!"
+    print("stlink is not supported now!")
 
+print("============================== Prepare upload end ==============================")

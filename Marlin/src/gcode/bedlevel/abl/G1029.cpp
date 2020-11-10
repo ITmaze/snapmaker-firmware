@@ -79,7 +79,7 @@ void GcodeSuite::G1029() {
       SERIAL_ECHOLNPAIR("Invalid grid size , maximum: ", GRID_MAX_NUM);
       return;
     }
-    set_bed_leveling_enabled(false); 
+    set_bed_leveling_enabled(false);
     GRID_MAX_POINTS_X = size;
     GRID_MAX_POINTS_Y = size;
 
@@ -92,7 +92,7 @@ void GcodeSuite::G1029() {
         #endif
       }
     }
-    
+
     ABL_GRID_POINTS_VIRT_X = (GRID_MAX_POINTS_X - 1) * (BILINEAR_SUBDIVISIONS) + 1;
     ABL_GRID_POINTS_VIRT_Y = (GRID_MAX_POINTS_Y - 1) * (BILINEAR_SUBDIVISIONS) + 1;
     ABL_TEMP_POINTS_X = (GRID_MAX_POINTS_X + 2);

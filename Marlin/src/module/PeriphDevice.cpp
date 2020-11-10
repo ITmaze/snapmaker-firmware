@@ -3,7 +3,7 @@
 #include "../Marlin.h"
 #include "../module/temperature.h"
 #include "../module/configuration_store.h"
-#include "periphdevice.h"
+#include "PeriphDevice.h"
 #include "../HAL/HAL_GD32F1/HAL_exti_STM32F1.h"
 #include "CanBus.h"
 #include "CanModule.h"
@@ -89,12 +89,13 @@ void PeriphDevice::SetEnclosureLightPower(uint8_t percent)
   Buff[1] = s_value;
   Buff[2] = s_value;
   Buff[3] = s_value;
-  
+
   CanModules.SetFunctionValue(EXTEND_CAN_NUM, FUNC_SET_ENCLOSURE_LIGHT, Buff, 4);
   enclosure_light_power_ = percent;
   SERIAL_ECHO("Enclosure light power: ");
   SERIAL_PRINTLN(enclosure_light_power_, DEC);
 }
+
 
 #if ENABLED(DOOR_SWITCH)
 
@@ -125,6 +126,7 @@ void PeriphDevice::CloseDoorTrigger() {
   ExecuterHead.CallbackCloseDoor();
   SystemStatus.CallbackCloseDoor();
 }
+
 /**
  * SetDoorCheck:enable or disable Door Sensor
  * para Enable:true enable ,false disable
@@ -176,7 +178,7 @@ void PeriphDevice::CheckChamberDoor() {
     // door is just opened
     if(TEST(CanModules.PeriphSwitch, CAN_IO_ENCLOSURE)) {
       LOG_I("door opened!\n");
-       OpenDoorTrigger();
+      OpenDoorTrigger();
     }
     break;
 
@@ -256,3 +258,87 @@ void PeriphDevice::CheckStatus() {
 
   TellUartState();
 }
+
+// callback for HMI events
+ErrCode PeriphDevice::ReportEnclosureStatus(Event_t &event) {
+  uint8_t buff[4];
+
+  LOG_I("SC req enclosure sta\n");
+
+  if (TEST(online_, PERIPH_IOSW_DOOR)) {
+    buff[0] = E_SUCCESS;
+  }
+  else {
+    buff[0] = E_FAILURE;
+  }
+
+  buff[1] = enclosure_light_power_;
+  buff[2] = enclosure_fan_speed_;
+
+  if (TEST(IOSwitch, PERIPH_IOSW_DOOR)) {
+    buff[3] = 1;
+  }
+  else {
+    buff[3] = 0;
+  }
+
+  event.length = 4;
+  event.data = buff;
+
+  return hmi.Send(event);
+}
+
+ErrCode PeriphDevice::SetEnclosureLight(Event_t &event) {
+  ErrCode err = E_SUCCESS;
+
+  if (event.length < 1) {
+    LOG_E("must specify light power!\n");
+    err = E_FAILURE;
+    goto OUT;
+  }
+
+  SetEnclosureLightPower(event.data[0]);
+
+OUT:
+  event.data = &err;
+  event.length = 1;
+
+  return hmi.Send(event);
+}
+
+ErrCode PeriphDevice::SetEnclosureFan(Event_t &event) {
+  ErrCode err = E_SUCCESS;
+
+  if (event.length < 1) {
+    LOG_E("must specify Fan speed!\n");
+    err = E_FAILURE;
+    goto OUT;
+  }
+
+  SetEnclosureFanSpeed(event.data[0]);
+
+OUT:
+  event.data = &err;
+  event.length = 1;
+
+  return hmi.Send(event);
+}
+
+ErrCode PeriphDevice::SetEnclosureDetection(Event_t &event) {
+  ErrCode err = E_SUCCESS;
+
+  if (event.length < 1) {
+    LOG_E("must tell me what to do for enclosure detection!\n");
+    err = E_FAILURE;
+    goto OUT;
+  }
+
+  SetDoorCheck(event.data[0]);
+
+OUT:
+  event.data = &err;
+  event.length = 1;
+
+  return hmi.Send(event);
+}
+

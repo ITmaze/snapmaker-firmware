@@ -2,6 +2,7 @@
 
 #include "../inc/MarlinConfig.h"
 #include "../snap_module/error.h"
+#include "../snap_module/quickstop_service.h"
 
 #ifndef _POWER_PANIC_H_
 #define _POWER_PANIC_H_
@@ -18,13 +19,13 @@ typedef enum
 #define PP_HEATER         4
 
 // delay for debounce, uint: ms, for now we use 10ms
-#define POWERPANIC_DEBOUNCE	10
+#define POWERPANIC_DEBOUNCE	6
 typedef struct __attribute__((aligned (4)))
 {
 	// checksum of this section
 	uint32_t CheckSum;
 	// temperature of extrucders
-	int16_t HeaterTamp[PP_HEATER];
+	int16_t HeaterTemp[PP_HEATER];
 	// speed of work
 	float PrintFeedRate;
 	// speed of travel
@@ -42,7 +43,7 @@ typedef struct __attribute__((aligned (4)))
 	float position_shift[XYZ];
 	// line number of last gcode
 	int FilePosition;
-	// 
+	//
 	uint32_t accumulator;
 	// fans' speed
 	uint8_t FanSpeed[PP_FAN_COUNT];
@@ -62,6 +63,9 @@ typedef struct __attribute__((aligned (4)))
 
 	bool axis_relative_modes[XYZE];
 	bool axes_relative_mode;
+
+	int16_t feedrate_percentage;
+	float   live_z_offset;
 } strPowerPanicSave;
 
 
@@ -75,12 +79,22 @@ public:
   void MaskPowerPanicData(void);
   int  SaveEnv(void);
   ErrCode ResumeWork();
-  void SaveCmdLine(uint32_t l);
-  void TurnOffPower(void);
-	void TurnOffPowerISR(void);
-	void Reset();
 
-	uint32_t LastLine() { return last_line; }
+  /*
+  * when a block is output ended, save it's line number
+  * this function is called by stepper isr()
+  * when powerloss happened, no need to record line num.
+  */
+  void FORCE_INLINE SaveCmdLine(uint32_t l) {
+	if (l != INVALID_CMD_LINE)
+		last_line_ = l;
+  }
+
+  void TurnOffPower(QuickStopState sta);
+	void Reset(void);
+	void Check(void);
+
+	uint32_t LastLine() { return last_line_; }
 
 public:
   strPowerPanicSave Data;
@@ -88,7 +102,10 @@ public:
 
 private:
   uint32_t WriteIndex;
-	uint32_t last_line;
+  uint32_t last_line_;
+	millis_t last_powerloss_;
+
+  bool enabled_;
 
   int Load(void);
 

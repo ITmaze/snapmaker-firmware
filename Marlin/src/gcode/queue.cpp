@@ -29,10 +29,10 @@
 
 #include "../module/planner.h"
 #include "../module/temperature.h"
-#include "../SnapScreen/Screen.h"
 #include "../Marlin.h"
 #include "../module/StatusControl.h"
 #include "../snap_module/snap_dbg.h"
+#include "../snap_module/event_handler.h"
 
 #if ENABLED(PRINTER_EVENT_LEDS)
   #include "../feature/leds/printer_event_leds.h"
@@ -100,13 +100,18 @@ static PGM_P injected_commands_P = NULL;
 
 void queue_setup() {
   // Send "ok" after commands by default
-  for (uint8_t i = 0; i < COUNT(send_ok); i++) send_ok[i] = Screen_send_ok[i] = true;
+  for (uint8_t i = 0; i < COUNT(send_ok); i++) {
+    send_ok[i] = true;
+    // for HMI commands, won't send ok by default until receive it's command
+    Screen_send_ok[i] = false;
+  }
 }
 
 /**
  * Clear the Marlin command queue
  */
 void clear_command_queue() {
+  hmi_cmd_queue_index_r = hmi_cmd_queue_index_w = hmi_commands_in_queue = 0;
   cmd_queue_index_r = cmd_queue_index_w = commands_in_queue = 0;
 }
 
@@ -227,6 +232,7 @@ void enqueue_and_echo_commands_P(PGM_P const pgcode) {
  */
 #if ENABLED(HMI_SC20W)
 void enqueue_hmi_to_marlin() {
+
   // guaranteed buffer available, shouldn't be missed, or screen status won't sync.
   // fetch as much command as possible
   while (commands_in_queue < BUFSIZE && hmi_commands_in_queue > 0)
@@ -235,44 +241,57 @@ void enqueue_hmi_to_marlin() {
     strcpy(command_queue[cmd_queue_index_w], hmi_command_queue[hmi_cmd_queue_index_r]);
     Screen_send_ok[cmd_queue_index_w] = true;
     Screen_send_ok_opcode[cmd_queue_index_w] = hmi_send_opcode_queue[hmi_cmd_queue_index_r];
-    // if is not file printing, then use previous line number.
-    if(Screen_send_ok_opcode[cmd_queue_index_w] == 0x02)
-        CommandLine[cmd_queue_index_w] = INVALID_CMD_LINE;
-    else
-        CommandLine[cmd_queue_index_w] = hmi_commandline_queue[hmi_cmd_queue_index_r];
+    CommandLine[cmd_queue_index_w] = hmi_commandline_queue[hmi_cmd_queue_index_r];
     send_ok[cmd_queue_index_w] = false;
     cmd_queue_index_w = (cmd_queue_index_w + 1) % BUFSIZE;
 
     hmi_cmd_queue_index_r = (hmi_cmd_queue_index_r + 1) % HMI_BUFSIZE;
     hmi_commands_in_queue--;
-
     commands_in_queue++;
   }
 }
 
 
-void Screen_enqueue_and_echo_commands(char* pgcode, uint32_t Lines, uint8_t Opcode)
+void Screen_enqueue_and_echo_commands(char* pgcode, uint32_t line, uint8_t opcode)
 {
+  int i;
+
   // we put HMI command to Marlin queue firstly
   // to avoid jumping directly, we check the condition before call it
   if (commands_in_queue < BUFSIZE && hmi_commands_in_queue > 0)
     enqueue_hmi_to_marlin();
 
-  if (hmi_commands_in_queue == HMI_BUFSIZE) {
-    LOG_E("HMI gcode buffer is full, losing line: %u\n", Lines);
+  if (hmi_commands_in_queue >= HMI_BUFSIZE) {
+    LOG_E("HMI gcode buffer is full, losing line: %u\n", line);
     return;
   }
 
-  // enter buffer queue
-  strcpy(hmi_command_queue[hmi_cmd_queue_index_w], pgcode);
-  hmi_commandline_queue[hmi_cmd_queue_index_w] = Lines;
-  hmi_send_opcode_queue[hmi_cmd_queue_index_w] = Opcode;
+  // ignore comment
+  if (pgcode[0] == ';') {
+    ack_gcode_event(opcode, line);
+    return;
+  }
+
+  // won't put comment part to queue, and limit cmd size to MAX_CMD_SIZE
+  for (i = 0; i < MAX_CMD_SIZE; i++) {
+    if (pgcode[i] == '\n' || pgcode[i] == '\r' || pgcode[i] == 0 || pgcode[i] == ';') {
+      hmi_command_queue[hmi_cmd_queue_index_w][i] = 0;
+      break;
+    }
+    hmi_command_queue[hmi_cmd_queue_index_w][i] = pgcode[i];
+  }
+
+  if (i >= MAX_CMD_SIZE) {
+    hmi_command_queue[hmi_cmd_queue_index_w][MAX_CMD_SIZE - 1] = 0;
+    LOG_E("line[%u] too long: %s\n", line, hmi_command_queue[hmi_cmd_queue_index_w]);
+    ack_gcode_event(opcode, line);
+    return;
+  }
+
+  hmi_commandline_queue[hmi_cmd_queue_index_w] = line;
+  hmi_send_opcode_queue[hmi_cmd_queue_index_w] = opcode;
   hmi_cmd_queue_index_w = (hmi_cmd_queue_index_w + 1) % HMI_BUFSIZE;
   hmi_commands_in_queue++;
-
-  // to avoid jumping directly, we check the condition before call it
-  if (commands_in_queue < BUFSIZE)
-    enqueue_hmi_to_marlin();
 }
 #endif
 
@@ -282,6 +301,21 @@ void Screen_enqueue_and_echo_commands(char* pgcode, uint32_t Lines, uint8_t Opco
  */
 bool ok_to_HMI() {
   return Screen_send_ok[cmd_queue_index_r];
+}
+
+
+void ack_gcode_event(uint8_t event_id, uint32_t line) {
+  Event_t event = {event_id, INVALID_OP_CODE};
+  uint8_t buffer[4];
+
+  event.length = 4;
+  event.data = buffer;
+
+  WORD_TO_PDU_BYTES(buffer, line);
+
+  SNAP_DEBUG_SET_GCODE_LINE(line);
+
+  hmi.Send(event);
 }
 
 /**
@@ -318,14 +352,9 @@ void ok_to_send() {
   }
   if(Screen_send_ok[cmd_queue_index_r])
   {
-    uint32_t line = CommandLine[cmd_queue_index_r];
-    ok_to_sc[0] = (char)((line & 0xFF000000) >> 24);
-    ok_to_sc[1] = (char)((line & 0x00FF0000) >> 16);
-    ok_to_sc[2] = (char)((line & 0x0000FF00) >> 8);
-    ok_to_sc[3] = (char)(line & 0x000000FF);
-
-    HMI.SendEvent(Screen_send_ok_opcode[cmd_queue_index_r], ok_to_sc, 4);
-    SNAP_DEBUG_SET_GCODE_LINE(line);
+    ack_gcode_event(Screen_send_ok_opcode[cmd_queue_index_r], CommandLine[cmd_queue_index_r]);
+    SNAP_DEBUG_SET_GCODE_LINE(CommandLine[cmd_queue_index_r]);
+    Screen_send_ok[cmd_queue_index_r] = false;
   }
 }
 
@@ -823,11 +852,7 @@ void advance_command_queue() {
 
   if (!commands_in_queue) return;
 
-
-
   gcode.process_next_command();
-
-
 
   // The queue may be reset by a command handler or by code invoked by idle() within a handler
   if (commands_in_queue) {

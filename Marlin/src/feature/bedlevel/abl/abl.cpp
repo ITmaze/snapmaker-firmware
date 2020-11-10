@@ -21,7 +21,6 @@
  */
 
 #include <src/module/probe.h>
-#include <src/SnapScreen/Screen.h>
 #include "../../../inc/MarlinConfig.h"
 
 #if ENABLED(AUTO_BED_LEVELING_BILINEAR)
@@ -34,6 +33,7 @@
 #define DEBUG_OUT ENABLED(DEBUG_LEVELING_FEATURE)
 #include "../../../core/debug_out.h"
 #include "../../../snap_module/snap_dbg.h"
+#include "../../../snap_module/level_service.h"
 
 int bilinear_grid_spacing[2], bilinear_start[2];
 float bilinear_grid_factor[2],
@@ -463,14 +463,18 @@ uint8_t auto_probing(bool reply_screen, bool fast_leveling) {
 
   int cur_x = 0;
   int cur_y = 0;
+  float z;
 
   int dir_idx = 0;
-  do_blocking_move_to_logical_z(15, 10);
+  do_blocking_move_to_z(15, 10);
 
   for (int k = 0; k < GRID_MAX_POINTS_X * GRID_MAX_POINTS_Y; ++k) {
     LOG_I("Probing No. %d\n", k);
 
-    float z = probe_pt(RAW_X_POSITION(_GET_MESH_X(cur_x)), RAW_Y_POSITION(_GET_MESH_Y(cur_y)), PROBE_PT_RAISE); // raw position
+    if (k < (GRID_MAX_POINTS_X * GRID_MAX_POINTS_Y - 1))
+      z = probe_pt(RAW_X_POSITION(_GET_MESH_X(cur_x)), RAW_Y_POSITION(_GET_MESH_Y(cur_y)), PROBE_PT_RAISE); // raw position
+    else
+      z = probe_pt(RAW_X_POSITION(_GET_MESH_X(cur_x)), RAW_Y_POSITION(_GET_MESH_Y(cur_y)), PROBE_PT_NONE); // raw position
     z_values[cur_x][cur_y] = z;
     visited[cur_x][cur_y] = true;
     if (isnan(z)) {
@@ -481,7 +485,7 @@ uint8_t auto_probing(bool reply_screen, bool fast_leveling) {
     }
 
     if (reply_screen) {
-        HMI.SendHalfCalibratePoint(0x03, cur_y * GRID_MAX_POINTS_X + cur_x + 1);
+        levelservice.SyncPointIndex((uint8_t)(cur_y * GRID_MAX_POINTS_X + cur_x + 1));
     }
 
     int new_x = cur_x + direction[dir_idx][0];
@@ -500,8 +504,11 @@ uint8_t auto_probing(bool reply_screen, bool fast_leveling) {
 
   
   // if fast_leveling is true, over directly. Otherwise move nozzle to current position of probe
-  if (!fast_leveling)
+  if (!fast_leveling) {
+    do_blocking_move_to_z(current_position[Z_AXIS] + 1, speed_in_calibration[Z_AXIS]);
+    // position recorded in leveling grid is logical coordinate, so need to use relative API
     do_blocking_move_to_logical_xy(_GET_MESH_X(GRID_MAX_POINTS_X / 2), _GET_MESH_Y(GRID_MAX_POINTS_Y / 2), speed_in_calibration[X_AXIS]);
+  }
 
   return ret;
 }

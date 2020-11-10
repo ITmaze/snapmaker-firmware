@@ -8,7 +8,7 @@
 #include "CanDefines.h"
 #include "StatusControl.h"
 #include "PeriphDevice.h"
-#include "../snap_module/quickstop.h"
+#include "../snap_module/quickstop_service.h"
 
 ExecuterManager ExecuterHead;
 
@@ -37,9 +37,7 @@ bool ExecuterManager::Detecte()
 }
 
 void ExecuterManager::Process() {
-
   Laser.TryCloseFan();
-
 }
 
 void ExecuterManager::CheckAlive() {

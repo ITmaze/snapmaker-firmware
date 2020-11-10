@@ -31,8 +31,9 @@
 #include "planner.h"
 #include "../core/language.h"
 #include "../HAL/shared/Delay.h"
-#include "executermanager.h"
+#include "ExecuterManager.h"
 #include "StatusControl.h"
+#include "PowerPanic.h"
 
 #define MAX6675_SEPARATE_SPI EITHER(HEATER_0_USES_MAX6675, HEATER_1_USES_MAX6675) && PIN_EXISTS(MAX6675_SCK, MAX6675_DO)
 
@@ -1005,8 +1006,8 @@ void Temperature::manage_heater() {
         // Make sure temperature is increasing
         if (watch_hotend[e].elapsed(ms)) { // Time to check this extruder?
           if (degHotend(e) < watch_hotend[e].target) {                             // Failed to increase enough?
-            _temp_error(e, PSTR(MSG_T_HEATING_FAILED), TEMP_ERR_PSTR(MSG_HEATING_FAILED_LCD, e));
-            //SystemStatus.ThrowException((ExceptionHost)e, ETYPE_HEAT_FAIL);
+            //_temp_error(e, PSTR(MSG_T_HEATING_FAILED), TEMP_ERR_PSTR(MSG_HEATING_FAILED_LCD, e));
+            SystemStatus.ThrowException((ExceptionHost)e, ETYPE_HEAT_FAIL);
           }
           else                                                                 // Start again if the target is still far off
             start_watching_heater(e);
@@ -2988,6 +2989,8 @@ void Temperature::isr() {
     #endif
   #endif
 
+  powerpanic.Check();
+
   // Poll endstops state, if required
   endstops.poll();
 
@@ -3218,6 +3221,9 @@ void Temperature::isr() {
       bool wants_to_cool = false, first_loop = true;
       wait_for_heatup = true;
       millis_t now, next_temp_ms = 0, next_cool_check_ms = 0;
+
+      xTaskNotify(snap_tasks->hmi, HMI_NOTIFY_WAITFOR_HEATING, eSetBits);
+
       do {
         // Target temperature might be changed during the loop
         if (target_temp != degTargetHotend(target_extruder)) {
@@ -3295,6 +3301,8 @@ void Temperature::isr() {
 
       } while (wait_for_heatup && TEMP_CONDITIONS);
 
+      ulTaskNotifyValueClear(snap_tasks->hmi, HMI_NOTIFY_WAITFOR_HEATING);
+
       if (wait_for_heatup) {
         #if ENABLED(PRINTER_EVENT_LEDS)
           printerEventLEDs.onHeatingDone();
@@ -3347,6 +3355,8 @@ void Temperature::isr() {
         const float start_temp = degBed();
         printerEventLEDs.onBedHeatingStart();
       #endif
+
+      xTaskNotify(snap_tasks->hmi, HMI_NOTIFY_WAITFOR_HEATING, eSetBits);
 
       do {
         // Target temperature might be changed during the loop
@@ -3425,6 +3435,7 @@ void Temperature::isr() {
 
       } while (wait_for_heatup && TEMP_BED_CONDITIONS);
 
+      ulTaskNotifyValueClear(snap_tasks->hmi, HMI_NOTIFY_WAITFOR_HEATING);
 
       #if DISABLED(BUSY_WHILE_HEATING) && ENABLED(HOST_KEEPALIVE_FEATURE)
         gcode.busy_state = old_busy_state;

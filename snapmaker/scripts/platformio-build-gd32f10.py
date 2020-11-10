@@ -34,7 +34,9 @@ mcu = env.BoardConfig().get("build.mcu", "")
 if mcu.startswith("gd32f10"):
     FRAMEWORK_DIR = join(env.get("PROJECT_DIR"), "snapmaker", "lib", "GD32F1")
 elif mcu.startswith("gd32f30"):
-    FRAMEWORK_DIR = join(env.get("PROJECT_DIR"), "snapmaker", "lib", "GD32F3")
+    # FRAMEWORK_DIR = join(env.get("PROJECT_DIR"), "snapmaker", "lib", "GD32F3")
+    sys.stderr.write("Could not find a suitable framework variant\n")
+    env.Exit(1)
 else:
     sys.stderr.write("Could not find a suitable framework variant\n")
     env.Exit(1)
@@ -206,9 +208,10 @@ env.Append(
 )
 
 # remap ldscript
+print("board_name: {}, mcu: {}, upload_protocol: {}".format(board_name, mcu, upload_protocol))
+
 ldscript = get_linker_script(board_name, mcu, upload_protocol)
-print "board_name: %s, mcu: %s, upload_protocol: %s" % (board_name,mcu,upload_protocol)
-print "ldscript: %s" % ldscript
+print("ldscript: {}".format(ldscript))
 env.Replace(LDSCRIPT_PATH=ldscript)
 
 if not isfile(join(FRAMEWORK_DIR, "variants", variant, "ld", ldscript)):

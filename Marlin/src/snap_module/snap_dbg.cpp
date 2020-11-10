@@ -60,8 +60,7 @@ const static char *excoption_str[32] {
 
 static SnapDebugLevel pc_msg_level = SNAP_DEBUG_LEVEL_INFO;
 static SnapDebugLevel sc_msg_level = SNAP_DEBUG_LEVEL_INFO;
-static char log_buf[SNAP_LOG_BUFFER_SIZE];
-static uint8_t log_head[12];
+static char log_buf[SNAP_LOG_BUFFER_SIZE + 2];
 
 const char *snap_debug_str[SNAP_DEBUG_LEVEL_MAX] = {
   SNAP_TRACE_STR,
@@ -73,65 +72,27 @@ const char *snap_debug_str[SNAP_DEBUG_LEVEL_MAX] = {
 
 
 void SnapDebug::SendLog2Screen(SnapDebugLevel l) {
-  int i = 0;
-  int j = 0;
-  int size = strlen(log_buf);
+  Event_t event = {EID_SYS_CTRL_ACK, SYSCTL_OPC_TRANS_LOG};
+
+  int size = strlen(log_buf+2);
 
   if (size == 0)
     return;
   else if (size >= 255) {
     size = 255;
-    log_buf[255] = '\0';
+    log_buf[255 + 2] = '\0';
   }
 
   // to include the end '\0'
   size++;
 
-// SOF
-  log_head[i++] = 0xAA;
-  log_head[i++] = 0x55;
+  log_buf[0] = l;
+  log_buf[1] = size;
 
-  // length
-  log_head[i++] = (uint8_t) ((size + 4) >> 8);
-  log_head[i++] = (uint8_t) (size + 4);
+  event.length = size + 2;
+  event.data = (uint8_t *)log_buf;
 
-  // protocol version
-  log_head[i++] = 0x00;
-
-  // length checksum
-  log_head[i++] = log_head[2] ^log_head[3];
-
-  // checksum for data
-  i++;
-  i++;
-
-  // EventID & operation code
-  log_head[i++] = EID_STATUS_RESP;
-  log_head[i++] = 0x10;
-
-  // log level and length
-  log_head[i++] = l;
-  log_head[i++] = (uint8_t)size;
-
-  uint32_t checksum = 0;
-  checksum += (uint32_t) (((uint8_t) log_head[8] << 8) | (uint8_t) log_head[9]);
-  checksum += (uint32_t) (((uint8_t) log_head[10] << 8) | (uint8_t) log_head[11]);
-
-  for (j = 0; j < (size - 1); j = j + 2)
-    checksum += (uint32_t) (((uint8_t) log_buf[j] << 8) | (uint8_t) log_buf[j + 1]);
-
-  // if size is odd number
-  if (size % 2) checksum += (uint8_t)log_buf[size - 1];
-
-  while (checksum > 0xffff) checksum = ((checksum >> 16) & 0xffff) + (checksum & 0xffff);
-  checksum = ~checksum;
-  log_head[6] = checksum >> 8;
-  log_head[7] = checksum;
-
-  for (j = 0; j < i; j++)
-    HMISERIAL.write(log_head[j]);
-  for (j = 0; j < size; j++)
-    HMISERIAL.write(log_buf[j]);
+  hmi.Send(event);
 }
 
 // output debug message, will not output message whose level
@@ -149,12 +110,12 @@ void SnapDebug::Log(SnapDebugLevel level, const char *fmt, ...) {
 
   va_start(args, fmt);
 
-  vsnprintf(log_buf, SNAP_LOG_BUFFER_SIZE, fmt, args);
+  vsnprintf(log_buf + 2, SNAP_LOG_BUFFER_SIZE, fmt, args);
 
   va_end(args);
 
   if (level >= pc_msg_level)
-    CONSOLE_OUTPUT(log_buf);
+    CONSOLE_OUTPUT(log_buf + 2);
 
   if (level >= sc_msg_level)
     SendLog2Screen(level);
@@ -178,6 +139,25 @@ void SnapDebug::SetLevel(uint8_t port, SnapDebugLevel l) {
   }
 }
 
+
+ErrCode SnapDebug::SetLogLevel(Event_t &event) {
+  ErrCode err = E_FAILURE;
+
+  if (event.length != 1) {
+    LOG_E("Need to specify log level!\n");
+    event.data = &err;
+    event.length = 1;
+  }
+  else {
+    LOG_V("SC req change log level");
+    sc_msg_level = (SnapDebugLevel)event.data[0];
+    event.data[0] = E_SUCCESS;
+  }
+
+  return hmi.Send(event);
+}
+
+
 SnapDebugLevel SnapDebug::GetLevel() {
   return sc_msg_level < pc_msg_level? sc_msg_level : pc_msg_level;
 }
@@ -197,12 +177,12 @@ void SnapDebug::CmdChecksumError(bool screen) {
 
 // show system debug info
 void SnapDebug::ShowInfo() {
-  Log(SNAP_DEBUG_LEVEL_INFO, "current status: %d\n", SystemStatus.GetCurrentStatus());
-  Log(SNAP_DEBUG_LEVEL_INFO, "SC cmd chksum error count: %u\n", info.screen_cmd_checksum_err);
-  // Log(SNAP_DEBUG_LEVEL_INFO, "PC cmd chksum error count: %u\n", info.pc_cmd_checksum_err);
-  Log(SNAP_DEBUG_LEVEL_INFO, "Last SC Gcode line: %d\n", info.last_line_num_of_sc_gcode);
-  Log(SNAP_DEBUG_LEVEL_INFO, "Last save Gcode line: %d\n", powerpanic.LastLine());
-  Log(SNAP_DEBUG_LEVEL_INFO, "Fault flag: 0x%08X, action ban: 0x%X, power ban: 0x%X\n",
+  Log(SNAP_DEBUG_LEVEL_INFO, "systat: %d\n", SystemStatus.GetCurrentStatus());
+  Log(SNAP_DEBUG_LEVEL_INFO, "SC chksum error: %u\n", info.screen_cmd_checksum_err);
+  Log(SNAP_DEBUG_LEVEL_INFO, "Last recv line: %d\n", SystemStatus.current_line());
+  Log(SNAP_DEBUG_LEVEL_INFO, "Last ack line: %d\n", info.last_line_num_of_sc_gcode);
+  Log(SNAP_DEBUG_LEVEL_INFO, "Last st line: %d\n", powerpanic.LastLine());
+  Log(SNAP_DEBUG_LEVEL_INFO, "Fault: 0x%08X, action ban: 0x%X, power ban: 0x%X\n",
         SystemStatus.GetFaultFlag(), action_ban, power_ban);
   Log(SNAP_DEBUG_LEVEL_INFO, "Homing: 0x%X, axes_known: 0x%X\n", axis_homed, axis_known_position);
   Log(SNAP_DEBUG_LEVEL_INFO, "active coordinate: %d\n", gcode.active_coordinate_system);

@@ -7,13 +7,14 @@
 #include "temperature.h"
 #include "configuration_store.h"
 #include "ExecuterManager.h"
-#include "Periphdevice.h"
+#include "PeriphDevice.h"
 #include "CanModule.h"
 #include <EEPROM.h>
 #include "../libs/GenerialFunctions.h"
-#include "../SnapScreen/Screen.h"
 #include "motion.h"
 #include "StatusControl.h"
+
+#include "../snap_module/upgrade_service.h"
 
 CanModule CanModules;
 
@@ -223,7 +224,7 @@ void CanModule::PrepareLinearModules(void) {
   if((X_MAX_POS == Y_MAX_POS) && (X_MAX_POS == Z_MAX_POS) && (X_MAX_POS > 0)) {
     if(X_MAX_POS < 200) {
       X_MAX_POS = 167;
-      Y_MAX_POS = 169;
+      Y_MAX_POS = 165;
       Z_MAX_POS = 150;
       X_HOME_DIR = 1;
       X_DIR = false;
@@ -269,7 +270,7 @@ void CanModule::PrepareLinearModules(void) {
     }
     else if(Z_MAX_POS < 400) {
       X_MAX_POS = 345;
-      Y_MAX_POS = 360;
+      Y_MAX_POS = 357;
       Z_MAX_POS = 334;
       X_HOME_DIR = -1;
       X_DIR = true;
@@ -281,7 +282,7 @@ void CanModule::PrepareLinearModules(void) {
       LOOP_XYZ(i) home_offset[i] = l_home_offset[i];
 
       X_DEF_SIZE = 320;
-      Y_DEF_SIZE = 350;
+      Y_DEF_SIZE = 340;
       Z_DEF_SIZE = 330; // unused & spec is lager than actual size.  334 - 6 = 328?
 
       MAGNET_X_SPAN = 274;
@@ -900,22 +901,22 @@ bool CanModule::GetFirmwareVersion(uint8_t CanNum, uint32 MacID, char* pVersion)
  * para ReportToScreen:True for reporting to the screen
  * para ReportToPC:True for reporting to the PC
  */
-void CanModule::EnumFirmwareVersion(bool ReportToScreen, bool ReportToPC) {
-  char Version[32];
-  uint32_t ID;
-  if((ReportToPC == false) && (ReportToScreen == false))
-    return;
+// void CanModule::EnumFirmwareVersion(bool ReportToScreen, bool ReportToPC) {
+//   char Version[32];
+//   uint32_t ID;
+//   if((ReportToPC == false) && (ReportToScreen == false))
+//     return;
 
-  for(int i=0;i<CanBusControlor.ModuleCount;i++) {
-    ID = CanBusControlor.ModuleMacList[i];
-    if(GetFirmwareVersion(BASIC_CAN_NUM, ID, Version) == true) {
-      if(ReportToPC == true)
-        SERIAL_ECHOPAIR("MAC:", Value32BitToString(ID), " Version", Version);
-      if(ReportToScreen == true)
-        HMI.SendModuleVersion(ID, Version);
-    }
-  }
-}
+//   for(int i=0;i<CanBusControlor.ModuleCount;i++) {
+//     ID = CanBusControlor.ModuleMacList[i];
+//     if(GetFirmwareVersion(BASIC_CAN_NUM, ID, Version) == true) {
+//       if(ReportToPC == true)
+//         SERIAL_ECHOPAIR("MAC:", Value32BitToString(ID), " Version", Version);
+//       if(ReportToScreen == true)
+//         upgrade.SendModuleVer(ID, Version);
+//     }
+//   }
+// }
 
 /**
  * SetAxesLength:Set the length of the specific linear module
@@ -1338,10 +1339,12 @@ void CanModule::UpdateProcess(void)
       }
     }
     EraseUpdatePack();
-    HMI.SendUpdateComplete(1);
+    upgrade.SendModuleUpgradeStatus(1);
     tmptick = millis() + 2000;
     while(tmptick > millis());
   }
+
+  upgrade.SetState(UPGRADE_STA_IDLE);
 }
 
 /**

@@ -1,38 +1,49 @@
-import shutil
+# -*- coding: UTF-8 -*-
+
+import os
 import sys
-from os.path import isdir, isfile, join
+import shutil
 
 Import("env")
 
-platform = env.PioPlatform()
+platform = env.PioPlatform()  # ststm32
+
+print("============================== Prepare env start ===============================")
+print("Prepare env for \"{}\"...".format(env.get("BOARD")))
+
+# Check framework
+framework_list = env.get("PIOFRAMEWORK")
+framework = framework_list[0]
+print("framework =", framework)  # arduino
+pkg = platform.frameworks[framework]["package"]
+print("package:", pkg)
+print()
+
+# Check Board config
 board = env.BoardConfig()
-
-print "++++++++++++++++++++++++++++++Prepare env start++++++++++++++++++++++++++++++" 
-print "Prepare env for " + env.get("BOARD")
-
-frwk = env.get("PIOFRAMEWORK")
-pkg = platform.frameworks[frwk[0]]["package"]
-
-pkg_dir = platform.get_package_dir(pkg)
-
-print "Package is " + pkg
-print "Location: " + pkg_dir
-
 mcu = board.get('build.mcu')
+core = board.get('build.core')
+variant = board.get('build.variant')
+print("build.mcu =", mcu)
+print("build.core =", core)
+print("build.variant =", variant)
+print()
 
-build_script = "platformio-build-%s.py" % mcu[0:7]
-build_script_path = join(pkg_dir, "tools", build_script)
-shutil.copy(join(sys.path[0], build_script), build_script_path)
+# Copy custom build script for our own MCU
+if framework == "arduino" and core == "maple":
+    build_script_name = "platformio-build-{}.py".format(mcu[0:7])
 
-"""
-frwk_dir = join(pkg_dir, mcu[0:6].upper())
-if isdir(frwk_dir):
-  print "%s is exist." % frwk_dir
-  # TODO: here need to add comparation between src and dst framework
+    local_script = os.path.join(sys.path[0], build_script_name)
+
+    # See script location at `platforms/ststm32/builder/frameworks/arduino.py`
+    # package_dir = platform.get_package_dir("framework-arduinoststm32-maple")
+    package_dir = platform.get_package_dir(pkg)
+    build_script = os.path.join(package_dir, "tools", build_script_name)
+
+    print("Copying build script \n from {} \n to {}".format(local_script, build_script))
+    shutil.copy(local_script, build_script)
 else:
-  print "%s is not exist." % frwk_dir
-  print "now create it"
-  shutil.copytree(join(sys.path[0], mcu[0:6].upper()), frwk_dir)
-"""
+    print("Unsupported framework / build core")
+    sys.exit(-1)
 
-print "++++++++++++++++++++++++++++++Prepare env end++++++++++++++++++++++++++++++" 
+print("============================== Prepare env end ==============================")

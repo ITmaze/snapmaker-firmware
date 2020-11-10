@@ -1,6 +1,8 @@
 #pragma once
 
 #include "../inc/MarlinConfig.h"
+#include "../snap_module/error.h"
+#include "../snap_module/host.h"
 
 //IO Switch Bits position
 #define PERIPH_IOSW_DOOR     0  // bit[0]
@@ -46,11 +48,18 @@ public:
 
   void TriggerDoorEvent(bool open);
   bool IsOnline(uint8_t periph_mask) { return TEST(online_, periph_mask); }
-  void OpenDoorTrigger();
-  void CloseDoorTrigger();
+
+  // callback for HMI events
+  ErrCode ReportEnclosureStatus(Event_t &event);
+  ErrCode SetEnclosureFan(Event_t &event);
+  ErrCode SetEnclosureLight(Event_t &event);
+  ErrCode SetEnclosureDetection(Event_t &event);
+
 private:
   void CheckChamberDoor();
   void TellUartState();
+  void OpenDoorTrigger();
+  void CloseDoorTrigger();
 
 private:
   uint8_t FanSpeed[PERIPH_FAN_COUNT];
@@ -60,7 +69,7 @@ private:
   bool      lock_uart_;
   millis_t  next_ms_;
   uint8_t   online_;
-  
+
 public:
   uint8_t IOSwitch;
 };

@@ -47,6 +47,7 @@
 #include <WString.h>
 #include <avr/dtostrf.h>
 #include <avr/pgmspace.h>
+#include <avr/interrupt.h>
 
 #include <libmaple/stm32.h>
 

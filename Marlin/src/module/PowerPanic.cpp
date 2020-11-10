@@ -4,27 +4,28 @@
 #include "../Marlin.h"
 #include "temperature.h"
 #include "planner.h"
-#include "executermanager.h"
+#include "ExecuterManager.h"
 #include "motion.h"
 #include "../gcode/gcode.h"
 #include "../feature/bedlevel/bedlevel.h"
 #include "../module/configuration_store.h"
 #include "../gcode/parser.h"
-#include "../SnapScreen/Screen.h"
-#include "periphdevice.h"
+#include "PeriphDevice.h"
 #include <EEPROM.h>
 #include "printcounter.h"
 #include "StatusControl.h"
 #include "stepper.h"
 #include "../snap_module/snap_dbg.h"
 #include "../feature/runout.h"
+#include "../snap_module/quickstop_service.h"
+#include "../snap_module/level_service.h"
 
 #include "PowerPanic.h"
 #include "ExecuterManager.h"
 
-#define FLASH_PAGE_SIZE 2048
-#define FLASH_RECORD_PAGES  (MARLIN_POWERPANIC_SIZE / 2048)
-#define RECORD_COUNT_PER_PAGE (FLASH_PAGE_SIZE / (sizeof(strPowerPanicSave) + 8))
+#define FLASH_PAGE_SIZE				2048
+#define FLASH_RECORD_PAGES		(MARLIN_POWERPANIC_SIZE / 2048)
+#define RECORD_COUNT_PER_PAGE	(FLASH_PAGE_SIZE / (sizeof(strPowerPanicSave) + 8))
 
 PowerPanic powerpanic;
 
@@ -41,6 +42,15 @@ void PowerPanic::Init(void) {
 
 	SET_INPUT(POWER_DETECT_PIN);
 
+  if (READ(POWER_DETECT_PIN) == POWER_LOSS_STATE) {
+    LOG_E("PL: power-loss signal triggerred!\n");
+    enabled_ = false;
+    SystemStatus.SetSystemFaultBit(FAULT_FLAG_POWER_DETECT_ERR);
+  }
+  else {
+    enabled_ = true;
+  }
+
   ret = Load();
 
   // if data is invalid, tell others
@@ -50,7 +60,14 @@ void PowerPanic::Init(void) {
     // got power panic data
 		if (ExecuterHead.MachineType == pre_data_.MachineType) {
 			SystemStatus.ThrowException(EHOST_MC, ETYPE_POWER_LOSS);
-			SERIAL_ECHOLNPGM("Got power panic data!");
+
+			if (pre_data_.live_z_offset != 0) {
+				LOG_I("PL: changed live z: %.3f\n", pre_data_.live_z_offset);
+				levelservice.live_z_offset(pre_data_.live_z_offset);
+				settings.save();
+			}
+
+			SERIAL_ECHOLN("PL: Got available data!");
 		}
 		else {
 			MaskPowerPanicData();
@@ -58,12 +75,12 @@ void PowerPanic::Init(void) {
     break;
   case 1:
     // data read from flash is invalid
-    SERIAL_ECHOLNPGM("invalid power panic data!");
+    SERIAL_ECHOLNPGM("PL: Unavailable data!");
     break;
 
   default:
     // do nothing for other results such as 2 = no power panic data
-    SERIAL_ECHOLNPGM("No power panic data!");
+    SERIAL_ECHOLNPGM("PL: No data!");
     break;
   }
 }
@@ -109,6 +126,8 @@ int PowerPanic::Load(void)
 		}
 	}
 
+	LOG_I("PL: first free block index: %d\n", tmpIndex);
+
 	// try to find a non-free block
 	for (i = 0; i < TotalCount; i++)
 	{
@@ -125,6 +144,8 @@ int PowerPanic::Load(void)
 		tmpIndex = (tmpIndex + TotalCount - 1) % TotalCount;
 	}
 
+	LOG_I("PL: first non-free block index: %d\n", tmpIndex);
+
 	// check the last value of flag
 	if(Flag == 0xffffffff) {
 		// arrive here we know the flash area is empty, never recording any power-loss data
@@ -134,6 +155,8 @@ int PowerPanic::Load(void)
 		pre_data_.Valid = 0;
 		// return value
 		ret = 2;
+
+		LOG_I("PL: no any data\n");
 	}
 	else {
 		// arrive here we may have avalible power-loss data
@@ -143,7 +166,7 @@ int PowerPanic::Load(void)
 		Flag = *((uint32_t*)addr);
 		if(Flag != 0x5555) {
 			// alright, this block has been masked by Screen
-
+			LOG_I("PL: data has been masked\n");
 			// make data to be invalid
 			pre_data_.Valid = 0;
 			ret = 1;
@@ -171,7 +194,7 @@ int PowerPanic::Load(void)
 
 			if (Checksum != tmpChecksum) {
 				// shit! uncorrent checksum, flash was damaged?
-				LOG_E("Error checksum[0x%08x] for power-loss data, should be [0x%08x]\n", tmpChecksum, Checksum);
+				LOG_E("PL: Error checksum[0x%08x] for power-loss data, should be [0x%08x]\n", tmpChecksum, Checksum);
 
 				// anyway, we mask this block
 				FLASH_Unlock();
@@ -190,6 +213,8 @@ int PowerPanic::Load(void)
 
 		// make write index to point next block
 		WriteIndex = (tmpIndex + 1) % TotalCount;
+		LOG_I("PL: next write index: %u\n", WriteIndex);
+
 		// check if need to erase flash page
 		if ((WriteIndex % RECORD_COUNT_PER_PAGE) == 0)
 		{
@@ -201,6 +226,8 @@ int PowerPanic::Load(void)
 			addr = (WriteIndex / RECORD_COUNT_PER_PAGE) * 2048 + (WriteIndex % RECORD_COUNT_PER_PAGE) * RecordSize + FLASH_MARLIN_POWERPANIC;
 			FLASH_ErasePage(addr);
 			FLASH_Lock();
+
+			LOG_I("PL: erased next page, addr: 0x%X\n", addr);
 		}
 	}
 
@@ -296,11 +323,11 @@ int PowerPanic::SaveEnv(void) {
   uint8_t *pBuff;
 
   // extruders' temperature
-	HOTEND_LOOP() Data.HeaterTamp[e] = thermalManager.temp_hotend[e].target;
+	HOTEND_LOOP() Data.HeaterTemp[e] = thermalManager.temp_hotend[e].target;
 
 	LOOP_XYZ(idx) Data.position_shift[idx] = position_shift[idx];
 
-	Data.FilePosition = last_line;
+	Data.FilePosition = last_line_;
 
 	Data.axes_relative_mode = relative_mode;
 
@@ -313,6 +340,13 @@ int PowerPanic::SaveEnv(void) {
 
   Data.PrintFeedRate = saved_g1_feedrate_mm_s;
   Data.TravelFeedRate = saved_g0_feedrate_mm_s;
+	Data.feedrate_percentage = feedrate_percentage;
+
+	// if live z offset was changed when working, record it
+	if (levelservice.live_z_offset_updated())
+		Data.live_z_offset = levelservice.live_z_offset();
+	else
+		Data.live_z_offset = 0;
 
   Data.accumulator = print_job_timer.duration();
 
@@ -322,8 +356,7 @@ int PowerPanic::SaveEnv(void) {
   // if power loss, we have record the position to Data.PositionData[]
 	// NOTE that we save logical position for XYZ
 	for (i=0; i<NUM_AXIS; i++) {
-		Data.PositionData[i] = (i == E_AXIS) ?
-				current_position[i] : NATIVE_TO_LOGICAL(current_position[i], i);
+		Data.PositionData[i] = current_position[i];
 	}
 
 #if (BOARD_VER == BOARD_SNAPMAKER1)
@@ -354,7 +387,6 @@ int PowerPanic::SaveEnv(void) {
 	case MACHINE_TYPE_LASER:
 		Data.laser_percent = ExecuterHead.Laser.GetPowerPercent();
 		Data.laser_pwm = ExecuterHead.Laser.GetTimPwm();
-		ExecuterHead.Laser.Off();
 	break;
 
 	default:
@@ -372,11 +404,6 @@ int PowerPanic::SaveEnv(void) {
 }
 
 void PowerPanic::Resume3DP() {
-
-	for (int i = 0; i < PP_FAN_COUNT; i++) {
-		ExecuterHead.SetFan(i, pre_data_.FanSpeed[i]);
-	}
-
 	// enable hotend
 	if(pre_data_.BedTamp > BED_MAXTEMP - 15) {
 		LOG_W("recorded bed temp [%f] is larger than %f, limited it.\n",
@@ -384,51 +411,55 @@ void PowerPanic::Resume3DP() {
 		pre_data_.BedTamp = BED_MAXTEMP - 15;
 	}
 
-	if (pre_data_.HeaterTamp[0] > HEATER_0_MAXTEMP - 15) {
+	if (pre_data_.HeaterTemp[0] > HEATER_0_MAXTEMP - 15) {
 		LOG_W("recorded hotend temp [%f] is larger than %f, limited it.\n",
 						pre_data_.BedTamp, HEATER_0_MAXTEMP - 15);
-		pre_data_.HeaterTamp[0] = HEATER_0_MAXTEMP - 15;
+		pre_data_.HeaterTemp[0] = HEATER_0_MAXTEMP - 15;
 	}
+
+	if (pre_data_.HeaterTemp[0] < 180)
+		pre_data_.HeaterTemp[0] = 180;
+
+	/* when recover 3DP from power-loss, maybe the filament is freezing because
+	 * nozzle has been cooling. If we raise Z in this condition, the model will
+	 * be pulled up, sometimes it will break the model.
+	 * So we heating the hotend to 150 celsius degree before raising Z
+	 */
+	thermalManager.setTargetBed(pre_data_.BedTamp);
+	thermalManager.setTargetHotend(pre_data_.HeaterTemp[0], 0);
+
+  	while (thermalManager.degHotend(0) < 150) idle();
 
 	RestoreWorkspace();
 
-	// for now, just care 1 hotend
-	thermalManager.setTargetHotend(pre_data_.HeaterTamp[0], 0);
-	thermalManager.setTargetBed(pre_data_.BedTamp);
-
 	// waiting temperature reach target
 	thermalManager.wait_for_bed(true);
-	thermalManager.wait_for_hotend(true);
+	thermalManager.wait_for_hotend(0, true);
 
-	// pre-extrude
-	relative_mode = true;
+  	// recover FAN speed after heating to save time
+	for (int i = 0; i < PP_FAN_COUNT; i++) {
+		ExecuterHead.SetFan(i, pre_data_.FanSpeed[i]);
+	}
 
-	current_position[E_AXIS] += 30;
-	line_to_current_position(10);
+	current_position[E_AXIS] += 20;
+	line_to_current_position(5);
 	planner.synchronize();
 
 	// try to cut out filament
 	current_position[E_AXIS] -= 6;
-	line_to_current_position(30);
-
-	// pre-extrude
-	current_position[E_AXIS] += 6;
-	line_to_current_position(10);
+	line_to_current_position(50);
 	planner.synchronize();
 
-	// absolute mode
-	relative_mode = false;
-
-	// set E to previous position
-	current_position[E_AXIS] = pre_data_.PositionData[E_AXIS];
-	planner.set_e_position_mm(current_position[E_AXIS]);
+	// E axis will be recovered in ResumeOver() using  Data.PositionData[]
+	// So put it in Data.PositionData[] in advance
+	Data.PositionData[E_AXIS] = pre_data_.PositionData[E_AXIS];
 
 	// move to target X Y
-	do_blocking_move_to_logical_xy(pre_data_.PositionData[X_AXIS], pre_data_.PositionData[Y_AXIS], 50);
+	move_to_limited_xy(pre_data_.PositionData[X_AXIS], pre_data_.PositionData[Y_AXIS], 50);
 	planner.synchronize();
 
 	// move to target Z
-	do_blocking_move_to_logical_z(pre_data_.PositionData[Z_AXIS], 30);
+	move_to_limited_z(pre_data_.PositionData[Z_AXIS], 30);
 	planner.synchronize();
 }
 
@@ -448,7 +479,7 @@ void PowerPanic::ResumeCNC() {
 	RestoreWorkspace();
 
 	// move to target X Y
-	do_blocking_move_to_logical_xy(pre_data_.PositionData[X_AXIS], pre_data_.PositionData[Y_AXIS], 50);
+	move_to_limited_xy(pre_data_.PositionData[X_AXIS], pre_data_.PositionData[Y_AXIS], 50);
 	planner.synchronize();
 
 	// enable CNC motor
@@ -456,8 +487,8 @@ void PowerPanic::ResumeCNC() {
 	LOG_I("Restore CNC power: %.2f\n", pre_data_.cnc_power);
 
 	// move to target Z
-	do_blocking_move_to_logical_z(pre_data_.PositionData[Z_AXIS] + 15, 30);
-	do_blocking_move_to_logical_z(pre_data_.PositionData[Z_AXIS], 10);
+	move_to_limited_z(pre_data_.PositionData[Z_AXIS] + 15, 30);
+	move_to_limited_z(pre_data_.PositionData[Z_AXIS], 10);
 	planner.synchronize();
 }
 
@@ -470,11 +501,11 @@ void PowerPanic::ResumeLaser() {
 	RestoreWorkspace();
 
 	// move to target X Y
-	do_blocking_move_to_logical_xy(pre_data_.PositionData[X_AXIS], pre_data_.PositionData[Y_AXIS], 50);
+	move_to_limited_xy(pre_data_.PositionData[X_AXIS], pre_data_.PositionData[Y_AXIS], 50);
 	planner.synchronize();
 
 	// move to target Z
-	do_blocking_move_to_logical_z(pre_data_.PositionData[Z_AXIS], 30);
+	move_to_limited_z(pre_data_.PositionData[Z_AXIS], 30);
 	planner.synchronize();
 
 	// Because we open laser when receive first command after resuming,
@@ -488,6 +519,8 @@ void PowerPanic::ResumeLaser() {
 
 
 void PowerPanic::RestoreWorkspace() {
+	feedrate_percentage = pre_data_.feedrate_percentage;
+
 	// home first
 	process_cmd_imd("G28");
 
@@ -530,7 +563,7 @@ ErrCode PowerPanic::ResumeWork() {
 			return E_NO_FILAMENT;
 		}
 
-		LOG_I("previous target temp: hotend: %d, bed: %d\n", pre_data_.HeaterTamp[0], pre_data_.BedTamp);
+		LOG_I("previous target temp: hotend: %d, bed: %d\n", pre_data_.HeaterTemp[0], pre_data_.BedTamp);
 
 		Resume3DP();
 		break;
@@ -585,53 +618,42 @@ ErrCode PowerPanic::ResumeWork() {
 /*
  * disable other unused peripherals in ISR
  */
-void PowerPanic::TurnOffPowerISR(void) {
-  // these 2 statement will disable power supply for
-  // HMI, BED, and all addones except steppers
-	disable_power_domain(POWER_DOMAIN_0 | POWER_DOMAIN_2);
+void PowerPanic::TurnOffPower(QuickStopState sta) {
+	if (sta  > QS_STA_TRIGGERED) {
+		BreathLightClose();
+
+		// disble timer except the stepper's
+		rcc_clk_disable(TEMP_TIMER_DEV->clk_id);
+		rcc_clk_disable(TIMER7->clk_id);
+
+		// disalbe ADC
+		rcc_clk_disable(ADC1->clk_id);
+		rcc_clk_disable(ADC2->clk_id);
+
+		//disble DMA
+		rcc_clk_disable(DMA1->clk_id);
+		rcc_clk_disable(DMA2->clk_id);
+
+		// disable other unnecessary soc peripherals
+		// disable usart
+		//rcc_clk_disable(MSerial1.c_dev()->clk_id);
+		//rcc_clk_disable(MSerial2.c_dev()->clk_id);
+		//rcc_clk_disable(MSerial3.c_dev()->clk_id);
+
+	#if ENABLED(EXECUTER_CANBUS_SUPPORT)
+		// turn off hot end and FAN
+		// if (ExecuterHead.MachineType == MACHINE_TYPE_3DPRINT) {
+		// 	ExecuterHead.SetTemperature(0, 0);
+		// }
+	#endif
+	}
+  else {
+    // these 2 statement will disable power supply for
+    // HMI, BED, and all addones except steppers
+    disable_power_domain(POWER_DOMAIN_0 | POWER_DOMAIN_2);
+  }
 }
 
-/*
- * disable other unused peripherals after ISR
- */
-void PowerPanic::TurnOffPower(void) {
-	BreathLightClose();
-
-	// disble timer except the stepper's
-	rcc_clk_disable(TEMP_TIMER_DEV->clk_id);
-	rcc_clk_disable(TIMER7->clk_id);
-
-	// disalbe ADC
-	rcc_clk_disable(ADC1->clk_id);
-	rcc_clk_disable(ADC2->clk_id);
-
-	//disble DMA
-	rcc_clk_disable(DMA1->clk_id);
-	rcc_clk_disable(DMA2->clk_id);
-
-	// disable other unnecessary soc peripherals
-	// disable usart
-	//rcc_clk_disable(MSerial1.c_dev()->clk_id);
-	//rcc_clk_disable(MSerial2.c_dev()->clk_id);
-	//rcc_clk_disable(MSerial3.c_dev()->clk_id);
-
-#if ENABLED(EXECUTER_CANBUS_SUPPORT)
-  // turn off hot end and FAN
-	// if (ExecuterHead.MachineType == MACHINE_TYPE_3DPRINT) {
-	//  ExecuterHead.SetTemperature(0, 0);
-	// }
-#endif
-}
-
-/*
- * when a block is output ended, save it's line number
- * this function is called by stepper isr()
- * when powerloss happened, no need to record line num.
- */
-void PowerPanic::SaveCmdLine(uint32_t l) {
-	if (l != INVALID_CMD_LINE)
-		last_line = l;
-}
 
 /*
  * reset the power-loss data, generally called in starting work
@@ -645,3 +667,21 @@ void PowerPanic::Reset() {
 		*ptr++ = 0;
 	}
 }
+
+void PowerPanic::Check(void) {
+  uint8_t powerstat = READ(POWER_DETECT_PIN);
+
+  if (!enabled_)
+    return;
+
+  // debounce for power loss, will delay 10ms for responce
+  if (powerstat != POWER_LOSS_STATE) {
+    last_powerloss_ = millis();
+    return;
+  }
+
+  if ((millis() - last_powerloss_) >= POWERPANIC_DEBOUNCE) {
+    quickstop.Trigger(QS_SOURCE_POWER_LOSS, true);
+  }
+}
+
