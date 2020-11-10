@@ -626,29 +626,21 @@ void HMI_SC20::MoveE(float extrude_len, float extrude_speed, float retract_len, 
 /********************************************************
 平自动调平处理
 *********************************************************/
-uint8_t HMI_SC20::HalfAutoCalibrate(bool fast_leveling)
+uint8_t HMI_SC20::HalfAutoCalibrate(bool fast_leveling, uint8_t grid)
 {
   float orig_max_z_speed = planner.settings.max_feedrate_mm_s[Z_AXIS];
 
-  LOG_I("e temp: %.2f / %.2f\n", thermalManager.degHotend(0), thermalManager.degTargetHotend(0));
-  LOG_I("b temp: %.2f / %.2f\n", thermalManager.degBed(), thermalManager.degTargetBed());
+  LOG_I("e temp: %.2f / %d\n", thermalManager.degHotend(0), thermalManager.degTargetHotend(0));
+  LOG_I("b temp: %.2f / %d\n", thermalManager.degBed(), thermalManager.degTargetBed());
 
   if ((CMD_BUFF_EMPTY() == true) && (MACHINE_TYPE_3DPRINT == ExecuterHead.MachineType)) {
-    // Turn off the heaters
-    thermalManager.disable_all_heaters();
+    process_cmd_imd("G28");
 
-    if (!go_home_before_cali && all_axes_homed() &&
-      (!position_shift[X_AXIS] && !position_shift[Y_AXIS] && !position_shift[Z_AXIS])) {
-      if (current_position[Z_AXIS] < z_limit_in_cali)
-        move_to_limited_z(z_limit_in_cali, XY_PROBE_FEEDRATE_MM_S/2);
-      move_to_limited_x(0, XY_PROBE_FEEDRATE_MM_S);
-      planner.synchronize();
-    }
-    else
-      process_cmd_imd("G28");
-    process_cmd_imd("G1029 P3"); // set the default probe points, hardcoded
+    sprintf(tmpBuff, "G1029 P%d", grid);
+    process_cmd_imd(tmpBuff); // set the default probe points, hardcoded
 
-    set_bed_leveling_enabled(false);
+    current_position[Z_AXIS] = Z_MAX_POS;
+    sync_plan_position();
 
     // change the Z max feedrate
     planner.settings.max_feedrate_mm_s[Z_AXIS] = max_speed_in_calibration[Z_AXIS];
@@ -678,7 +670,7 @@ uint8_t HMI_SC20::HalfAutoCalibrate(bool fast_leveling)
 /****************************************************
 手动调平启动
 ***************************************************/
-uint8_t HMI_SC20::ManualCalibrateStart()
+uint8_t HMI_SC20::ManualCalibrateStart(uint8_t grid)
 {
   int i, j;
   float orig_max_z_speed = planner.settings.max_feedrate_mm_s[Z_AXIS];
@@ -690,27 +682,20 @@ uint8_t HMI_SC20::ManualCalibrateStart()
 
     planner.settings.max_feedrate_mm_s[Z_AXIS] = max_speed_in_calibration[Z_AXIS];
 
-    // Disable all heaters
-    thermalManager.disable_all_heaters();
-    if (!go_home_before_cali && all_axes_homed() &&
-      (!position_shift[X_AXIS] && !position_shift[Y_AXIS] && !position_shift[Z_AXIS])) {
-      if (current_position[Z_AXIS] < z_limit_in_cali)
-        move_to_limited_z(z_limit_in_cali, XY_PROBE_FEEDRATE_MM_S/2);
-      move_to_limited_x(0, XY_PROBE_FEEDRATE_MM_S);
-      planner.synchronize();
-    }
-    else
-      process_cmd_imd("G28");
-    process_cmd_imd("G1029 P3"); // set the default probe points, hardcoded
+    process_cmd_imd("G28");
+
+    sprintf(tmpBuff, "G1029 P%d", grid);
+    process_cmd_imd(tmpBuff); // set the default probe points, hardcoded
 
     set_bed_leveling_enabled(false);
 
-    bilinear_grid_manual();
+    current_position[Z_AXIS] = Z_MAX_POS;
+    sync_plan_position();
 
     // Move Z to 20mm height
     do_blocking_move_to_z(z_position_before_calibration, speed_in_calibration[Z_AXIS]);
 
-    do_blocking_move_to_z(15, 10);
+    do_blocking_move_to_z(9, 10);
 
     // Preset the index to 99 for initial status
     PointIndex = 99;
@@ -896,6 +881,26 @@ void HMI_SC20::ReportLinearModuleMacID(void) {
   PackedProtocal(packBuff, i);
 }
 
+/**
+ * ReportEnclosureState:Send enclosure state lead to SC20
+ */
+void HMI_SC20::ReportEnclosureState() {
+  uint8_t enclosure_online = Periph.IsOnline(PERIPH_IOSW_DOOR);
+  uint8_t enclosure_en = Periph.GetDoorCheckFlag();
+
+  uint8_t i = 0;
+  packBuff[i++] = EID_ADDON_OP_RESP;
+  packBuff[i++] = CMD_ENCLOSURE_QUERY_STATE;
+  if (enclosure_online) {
+    packBuff[i++] = E_SUCCESS;
+  } else{
+    packBuff[i++] = E_FAILURE;
+  }
+  packBuff[i++] = Periph.GetEnclosureLightPower();
+  packBuff[i++] = Periph.GetEnclosureFanSpeed();
+  packBuff[i++] = enclosure_en;
+  PackedProtocal(packBuff, i);
+}
 
 extern uint8_t hmi_commands_in_queue;
 void HMI_SC20::PollingCommand(bool nested) {
@@ -1243,28 +1248,36 @@ void HMI_SC20::HandleOneCommand(bool reject_sync_write)
 
         // enable auto level bed
         case 2:
-          MarkNeedReack(HalfAutoCalibrate(false));
+          if (cmdLen > 2) {
+            MarkNeedReack(HalfAutoCalibrate(false, tmpBuff[10]));
+          } else {
+            MarkNeedReack(HalfAutoCalibrate(false));
+          }
           break;
 
         // enble manual level bed
         case 4:
           LOG_I("SC req manual level\n");
-          MarkNeedReack(ManualCalibrateStart());
+          if (cmdLen > 2) {
+            MarkNeedReack(ManualCalibrateStart(tmpBuff[10]));
+          } else {
+            MarkNeedReack(ManualCalibrateStart());
+          }
           break;
 
         // move to leveling point
         case 5:
           LOG_I("SC req move to pont: %d\n", tmpBuff[10]);
-          if ((tmpBuff[10] < 10) && (tmpBuff[10] > 0)) {
+          if ((tmpBuff[10] <= GRID_MAX_POINTS_INDEX) && (tmpBuff[10] > 0)) {
             // check point index
-            if (PointIndex < 10) {
+            if (PointIndex <= GRID_MAX_POINTS_INDEX) {
               // save point index
               MeshPointZ[PointIndex] = current_position[Z_AXIS];
               LOG_I("P[%d]: (%.2f, %.2f, %.2f)\n", PointIndex, current_position[X_AXIS], current_position[Y_AXIS], current_position[Z_AXIS]);
 
               // if got new point, raise Z firstly
               if ((PointIndex != tmpBuff[10] -1) && current_position[Z_AXIS] < z_position_before_calibration)
-                do_blocking_move_to_z(current_position[Z_AXIS] + 3, speed_in_calibration[Z_AXIS]);
+                do_blocking_move_to_z(current_position[Z_AXIS] + 2, speed_in_calibration[Z_AXIS]);
             }
 
             // move to new point
@@ -1290,7 +1303,7 @@ void HMI_SC20::HandleOneCommand(bool reject_sync_write)
         case 7:
           LOG_I("SC req save data of leveling\n");
           planner.synchronize();
-          if (CalibrateMethod == 2 && PointIndex < 10) {
+          if (CalibrateMethod == 2 && PointIndex <= GRID_MAX_POINTS_INDEX) {
             // save the last point
             MeshPointZ[PointIndex] = current_position[Z_AXIS];
             LOG_I("P[%d]: (%.2f, %.2f, %.2f)\n", PointIndex, current_position[X_AXIS], current_position[Y_AXIS], current_position[Z_AXIS]);
@@ -1343,7 +1356,7 @@ void HMI_SC20::HandleOneCommand(bool reject_sync_write)
           LOG_I("SC req exit level\n");
           if (CMD_BUFF_EMPTY() == true) {
 
-            //Load
+            // recover previous leveling data
             settings.load();
 
             set_bed_leveling_enabled(true);
@@ -1729,31 +1742,23 @@ void HMI_SC20::HandleOneCommand(bool reject_sync_write)
       case CMD_ADDON_CHK_ONLINE:
         break;
 
-      case CMD_LB_QUERY_STATE:
-        lightbar.sync2host();
+      case CMD_ENCLOSURE_QUERY_STATE:
+        ReportEnclosureState();
         break;
 
-      case CMD_LB_SET_MODE_BRIGHTNESS:
-        Result = lightbar.set_mode((LightBarMode)tmpBuff[IDX_DATA0]);
-        if ((LightBarMode)tmpBuff[IDX_DATA0] == LB_MODE_LIGHTING)
-          Result = lightbar.set_brightness(tmpBuff[IDX_DATA0 + 1]);
-        MarkNeedReack(!!Result);
-        break;
-
-      case CMD_LB_SWITCH:
-        if (tmpBuff[IDX_DATA0])
-          Result = lightbar.turn_on();
-        else
-          Result = lightbar.turn_off();
+      case CMD_ENCLOSURE_LB_SWITCH:
+        Periph.SetEnclosureLightPower(tmpBuff[IDX_DATA0]);
         MarkNeedReack(0);
         break;
 
       case CMD_ENCLOSURE_FAN_SWITCH:
-        if(tmpBuff[IDX_DATA0] == 0)
-          Periph.SetEnclosureFanSpeed(0);
-        else
-          Periph.SetEnclosureFanSpeed(255);
-          MarkNeedReack(0);
+        Periph.SetEnclosureFanSpeed(tmpBuff[IDX_DATA0]);
+        MarkNeedReack(0);
+        break;
+
+      case CMD_ENCLOSURE_EN_SWITCH:
+        Periph.SetDoorCheck(tmpBuff[IDX_DATA0]);
+        MarkNeedReack(0);
         break;
 
       default:
@@ -1826,7 +1831,9 @@ void HMI_SC20::HandleOneCommand(bool reject_sync_write)
     }
 
     if (GenReack == true) SendGeneralReack((eventId + 1), OpCode, Result);
-
+    if (Periph.IsDoorOpened()) {
+      Periph.OpenDoorTrigger();
+    }
     //ReadTail = ReadHead;
   }
 }

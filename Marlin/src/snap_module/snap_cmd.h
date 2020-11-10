@@ -46,13 +46,15 @@
 #define IDX_DATA0     10
 
 // common commands for add-ons
-#define CMD_ADDON_CHK_ONLINE        0
+#define CMD_ADDON_CHK_ONLINE          0
 
-// commands for light bar, LB = light bar
-#define CMD_LB_QUERY_STATE          1
-#define CMD_LB_SWITCH               2
-#define CMD_LB_SET_MODE_BRIGHTNESS  3
+// commands for light, LB = light bar
+#define CMD_LB_QUERY_STATE            1  // light module
+// commands for enclosure, LB = light bar
+#define CMD_ENCLOSURE_QUERY_STATE     1
+#define CMD_ENCLOSURE_LB_SWITCH       2
+#define CMD_ENCLOSURE_FAN_SWITCH      3
 // commands for enclosure fan
-#define CMD_ENCLOSURE_FAN_SWITCH    4
+#define CMD_ENCLOSURE_EN_SWITCH       4
 
 #endif

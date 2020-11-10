@@ -26,9 +26,6 @@ void PeriphDevice::Init()
   IOSwitch = 0;
   online_ = 0;
 
-  if (MACHINE_TYPE_3DPRINT == ExecuterHead.MachineType)
-    return;
-
   // check if chamber is exist and if door is opened or not
   for (i = 0; i < CanBusControlor.ExtendModuleCount; i++) {
     if (CanBusControlor.ExtendModuleMacList[i] & MAKE_ID(MODULE_ENCLOSER)) {
@@ -40,6 +37,9 @@ void PeriphDevice::Init()
       // set online flag
       SBI(online_, PERIPH_IOSW_DOOR);
 
+      if (MACHINE_TYPE_3DPRINT == ExecuterHead.MachineType)
+        return;
+
       // enable door checking by defualt
       SBI(IOSwitch, PERIPH_IOSW_DOOR);
 
@@ -49,9 +49,7 @@ void PeriphDevice::Init()
       // init chamber state per current state
       if (TEST(CanModules.PeriphSwitch, CAN_IO_ENCLOSURE)) {
         LOG_I("door is opened!\n");
-        ExecuterHead.CallbackOpenDoor();
-        SystemStatus.CallbackOpenDoor();
-        cb_state_ = CHAMBER_STA_OPEN;
+        OpenDoorTrigger();
       }
       break;
     }
@@ -66,16 +64,37 @@ void PeriphDevice::Init()
  * para index:
  * para percent:
  */
-void PeriphDevice::SetEnclosureFanSpeed(uint8_t s_value)
+void PeriphDevice::SetEnclosureFanSpeed(uint8_t percent)
 {
   uint8_t Data[2];
-
+  uint8_t s_value = ((percent > 100) ? 100 : percent) * 255 / 100;
   Data[0] = 0;
   Data[1] = s_value;
+  enclosure_fan_speed_ = percent;
   CanModules.SetFunctionValue(EXTEND_CAN_NUM, FUNC_SET_FAN_MODULE, Data, 2);
+  SERIAL_ECHO("Enclosure fan power: ");
+  SERIAL_PRINTLN(enclosure_fan_speed_, DEC);
 }
-
 #endif
+
+/**
+ * SetEnclosureLightPower:Set enclosure light power
+ * para percent: power percentage
+ */
+void PeriphDevice::SetEnclosureLightPower(uint8_t percent)
+{
+  uint8_t s_value = ((percent > 100) ? 100 : percent) * 255 / 100;
+  uint8_t Buff[8];
+  Buff[0] = 1;
+  Buff[1] = s_value;
+  Buff[2] = s_value;
+  Buff[3] = s_value;
+  
+  CanModules.SetFunctionValue(EXTEND_CAN_NUM, FUNC_SET_ENCLOSURE_LIGHT, Buff, 4);
+  enclosure_light_power_ = percent;
+  SERIAL_ECHO("Enclosure light power: ");
+  SERIAL_PRINTLN(enclosure_light_power_, DEC);
+}
 
 #if ENABLED(DOOR_SWITCH)
 
@@ -87,6 +106,25 @@ bool PeriphDevice::IsDoorOpened() {
   #endif
 }
 
+uint8_t PeriphDevice::GetEnclosureLightPower() {
+    return enclosure_light_power_;
+}
+
+uint8_t PeriphDevice::GetEnclosureFanSpeed() {
+    return enclosure_fan_speed_;
+}
+
+
+void PeriphDevice::OpenDoorTrigger() {
+  ExecuterHead.CallbackOpenDoor();
+  SystemStatus.CallbackOpenDoor();
+  cb_state_ = CHAMBER_STA_OPEN;
+}
+
+void PeriphDevice::CloseDoorTrigger() {
+  ExecuterHead.CallbackCloseDoor();
+  SystemStatus.CallbackCloseDoor();
+}
 /**
  * SetDoorCheck:enable or disable Door Sensor
  * para Enable:true enable ,false disable
@@ -99,9 +137,7 @@ void PeriphDevice::SetDoorCheck(bool Enable) {
 
     if (TEST(CanModules.PeriphSwitch, CAN_IO_ENCLOSURE)) {
       LOG_I("door is opened!\n");
-      ExecuterHead.CallbackOpenDoor();
-      SystemStatus.CallbackOpenDoor();
-      cb_state_ = CHAMBER_STA_OPEN;
+      OpenDoorTrigger();
     }
   }
   else if (!Enable && TEST(IOSwitch, PERIPH_IOSW_DOOR)) {
@@ -113,8 +149,7 @@ void PeriphDevice::SetDoorCheck(bool Enable) {
       switch (cb_state_) {
       case CHAMBER_STA_OPEN:
       case CHAMBER_STA_OPEN_HANDLED:
-        ExecuterHead.CallbackCloseDoor();
-        SystemStatus.CallbackCloseDoor();
+        CloseDoorTrigger();
         break;
 
       default:
@@ -141,9 +176,7 @@ void PeriphDevice::CheckChamberDoor() {
     // door is just opened
     if(TEST(CanModules.PeriphSwitch, CAN_IO_ENCLOSURE)) {
       LOG_I("door opened!\n");
-      ExecuterHead.CallbackOpenDoor();
-      SystemStatus.CallbackOpenDoor();
-      cb_state_ = CHAMBER_STA_OPEN;
+       OpenDoorTrigger();
     }
     break;
 
@@ -155,8 +188,7 @@ void PeriphDevice::CheckChamberDoor() {
     // query if door is closed
     if (!TEST(CanModules.PeriphSwitch, CAN_IO_ENCLOSURE)) {
       LOG_I("door closed!\n");
-      ExecuterHead.CallbackCloseDoor();
-      SystemStatus.CallbackCloseDoor();
+      CloseDoorTrigger();
       cb_state_ = CHAMBER_STA_CLOSED;
     }
     break;
@@ -196,13 +228,19 @@ void PeriphDevice::TellUartState() {
 }
 
 void PeriphDevice::ReportStatus() {
-  if (TEST(IOSwitch, PERIPH_IOSW_DOOR)) {
-    SERIAL_ECHOLN("Enclosure: On");
-    SERIAL_ECHO("Door: ");
+  if (IsOnline(PERIPH_IOSW_DOOR)) {
+    SERIAL_ECHOLN("Enclosure online: On");
+    SERIAL_ECHO("Enclosure: ");
+    SERIAL_ECHOLN(TEST(IOSwitch, PERIPH_IOSW_DOOR)? "On" : "Off");
+    SERIAL_ECHO("Enclosure door: ");
     SERIAL_ECHOLN(TEST(CanModules.PeriphSwitch, CAN_IO_ENCLOSURE)? "Open" : "Closed");
+    SERIAL_ECHO("Enclosure light power: ");
+    SERIAL_PRINTLN(enclosure_light_power_, DEC);
+    SERIAL_ECHO("Enclosure fan power: ");
+    SERIAL_PRINTLN(enclosure_fan_speed_, DEC);
   }
   else {
-    SERIAL_ECHOLN("Enclosure: Off");
+    SERIAL_ECHOLN("Enclosure online: Off");
   }
 }
 
@@ -213,7 +251,7 @@ void PeriphDevice::TriggerDoorEvent(bool open) {
     CBI(CanModules.PeriphSwitch, CAN_IO_ENCLOSURE);
 }
 
-void PeriphDevice::Process() {
+void PeriphDevice::CheckStatus() {
   CheckChamberDoor();
 
   TellUartState();

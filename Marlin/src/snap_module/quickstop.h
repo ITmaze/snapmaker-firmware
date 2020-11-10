@@ -5,6 +5,8 @@
 #include "../module/planner.h"
 #include "../core/macros.h"
 
+
+#define CNC_SAFE_HIGH_DIFF 30  // Bed to CNC head height. mm
 // all events which is able to trigger quick stop
 // event triggered in non-ISR:
 // 1. door of chamber is opened

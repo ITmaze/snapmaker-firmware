@@ -24,6 +24,8 @@ public:
     void SetDoorCheck(bool Enable);
     FORCE_INLINE bool GetDoorCheckFlag() { return TEST(IOSwitch, PERIPH_IOSW_DOOR); }
     bool IsDoorOpened();
+    uint8_t GetEnclosureLightPower();
+    uint8_t GetEnclosureFanSpeed();
   #else
     void SetDoorCheck(bool Enable) {}
     FORCE_INLINE bool GetDoorCheckFlag() { return false; }
@@ -32,6 +34,7 @@ public:
 
   #if ENABLED(CAN_FAN)
     void SetEnclosureFanSpeed(uint8_t s_value);
+    void SetEnclosureLightPower(uint8_t s_value);
   #endif
 
   void SetUartLock(bool f);
@@ -39,21 +42,25 @@ public:
 
   void ReportStatus();
 
-  void Process();
+  void CheckStatus();
 
   void TriggerDoorEvent(bool open);
   bool IsOnline(uint8_t periph_mask) { return TEST(online_, periph_mask); }
-
+  void OpenDoorTrigger();
+  void CloseDoorTrigger();
 private:
   void CheckChamberDoor();
   void TellUartState();
 
 private:
+  uint8_t FanSpeed[PERIPH_FAN_COUNT];
+  uint8_t enclosure_light_power_ = 0;
+  uint8_t enclosure_fan_speed_ = 0;
   ChamberState cb_state_;
   bool      lock_uart_;
   millis_t  next_ms_;
   uint8_t   online_;
-
+  
 public:
   uint8_t IOSwitch;
 };

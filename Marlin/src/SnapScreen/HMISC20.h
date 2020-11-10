@@ -37,6 +37,7 @@ public:
   void ReportLinearLength();
   void ReportLinearLead();
   void ReportLinearModuleMacID(void);
+  void ReportEnclosureState(void);
   void CheckFirmwareVersion(char *pNewVersion);
   void PackedProtocal(char *pData, uint16_t len);
   void SetFeedrate(float f) { last_feedrate = f; }
@@ -50,8 +51,8 @@ public:
 private:
   void HmiWriteData(char *pData, uint16_t len);
   short GetCommand(unsigned char *pBuff);
-  uint8_t HalfAutoCalibrate(bool fast_leveling);
-  uint8_t ManualCalibrateStart();
+  uint8_t HalfAutoCalibrate(bool fast_leveling, uint8_t grid=3);
+  uint8_t ManualCalibrateStart(uint8_t grid=3);
   void SendWifiIP(uint8_t OpCode, uint8_t Result, char * SSID, char * PWD, char * IP);
   void SendBluetoothName(uint8_t OpCode, uint8_t Result, char * Name);
   void SendBluetoothMac(uint8_t OpCode, uint8_t Result, uint8_t * Mac);

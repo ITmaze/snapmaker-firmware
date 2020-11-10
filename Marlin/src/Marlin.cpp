@@ -269,8 +269,6 @@ uint32_t ABL_TEMP_POINTS_Y;
  */
 
 void reset_homeoffset() {
-  int i;
-
   float s_home_offset_def[XYZ] = S_HOME_OFFSET_DEFAULT;
   float m_home_offset_def[XYZ] = M_HOME_OFFSET_DEFAULT;
   float l_home_offset_def[XYZ] = L_HOME_OFFSET_DEFAULT;
@@ -279,6 +277,22 @@ void reset_homeoffset() {
     s_home_offset[i] = s_home_offset_def[i];
     m_home_offset[i] = m_home_offset_def[i];
     l_home_offset[i] = l_home_offset_def[i];
+  }
+
+  LOOP_XYZ(i) {
+    switch (CanModules.GetMachineSizeType()) {
+      case MACHINE_SIZE_S:
+        home_offset[i] = s_home_offset[i];
+        break;
+      case MACHINE_SIZE_M:
+        home_offset[i] = m_home_offset[i];
+        break;
+      case MACHINE_SIZE_L:
+        home_offset[i] = l_home_offset[i];
+        break;
+      default:
+        break;
+    }
   }
 }
 
@@ -854,6 +868,7 @@ void idle(
   #if ENABLED(PRUSA_MMU2)
     mmu2.mmuLoop();
   #endif
+  Periph.CheckStatus();
 }
 
 /**
@@ -1410,7 +1425,6 @@ void loop() {
     quickstop.Process();
     endstops.event_handler();
     SystemStatus.Process();
-    Periph.Process();
     ExecuterHead.Process();
     idle(false);
 

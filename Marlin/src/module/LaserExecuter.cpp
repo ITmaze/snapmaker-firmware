@@ -95,58 +95,42 @@ void LaserExecuter::TryCloseFan() {
   }
 }
 
+void LaserExecuter::SetLaserPwm(uint16_t pwmvalue) {
+  CheckFan(pwmvalue);
+  TimSetPwm(pwmvalue);
+}
 /**
  * SetLaserLowPower:Set laser power
  * para percent:
  */
-void LaserExecuter::SetLaserPower(float Percent)
-{
-  int integer;
-  float decimal;
-  uint16_t pwmvalue;
-
+void LaserExecuter::SetLaserPower(float Percent) {
   SysStatus cur_stat = SystemStatus.GetCurrentStatus();
 
   if (cur_stat == SYSTAT_PAUSE_TRIG || cur_stat == SYSTAT_END_TRIG)
     return;
 
-  if (Percent > power_limit_)
-    Percent = power_limit_;
-
-  last_percent = Percent;
-  integer = Percent;
-  decimal = Percent - integer;
-  pwmvalue = LaserPowerTable[integer] + (LaserPowerTable[integer + 1] - LaserPowerTable[integer]) * decimal;
-
-  last_pwm = pwmvalue;
-
-  CheckFan(pwmvalue);
-
-  TimSetPwm(pwmvalue);
+  ChangePower(Percent);
+  SetLaserPwm(last_pwm);
 }
 
 /**
  * Off:Laser off without changing the power
  */
-void LaserExecuter::Off()
-{
-  CheckFan(0);
-  TimSetPwm(0);
+void LaserExecuter::Off() {
+  SetLaserPwm(0);
 }
 
 /**
  * On:Laser on and use the last power
  */
-void LaserExecuter::On()
-{
+void LaserExecuter::On() {
   SysStatus cur_stat = SystemStatus.GetCurrentStatus();
 
   if (cur_stat == SYSTAT_PAUSE_TRIG || cur_stat == SYSTAT_END_TRIG) {
     LOG_W("cannot open laser during pause/stop triggered!\n");
     return;
   }
-  CheckFan(last_pwm);
-  TimSetPwm(last_pwm);
+  SetLaserPower(last_percent);
 }
 
 
@@ -311,13 +295,13 @@ char LaserExecuter::GetReply(uint8_t *Buff, millis_t Timeout) {
       DataLen = ((uint16_t)Buff[2] << 8) | Buff[3];
       if((DataLen + 8) <= i) {
         calCheck = 0;
-      	for(j = 8;j<(DataLen + 8 - 1);j = j + 2)
-      		calCheck += (((uint16_t)Buff[j] << 8) | Buff[j + 1]);
-      	if((DataLen - 8) % 2)
-      		calCheck += (uint8_t)Buff[DataLen + 8 -1];
-      	while(calCheck > 0xffff)
-      		calCheck = ((calCheck >> 16) & 0xffff) + (calCheck & 0xffff);
-      	calCheck = (~calCheck) & 0xffff;
+        for(j = 8;j<(DataLen + 8 - 1);j = j + 2)
+          calCheck += (((uint16_t)Buff[j] << 8) | Buff[j + 1]);
+        if((DataLen - 8) % 2)
+          calCheck += (uint8_t)Buff[DataLen + 8 -1];
+        while(calCheck > 0xffff)
+          calCheck = ((calCheck >> 16) & 0xffff) + (calCheck & 0xffff);
+        calCheck = (~calCheck) & 0xffff;
         GetChecksum = (uint32_t)((Buff[6] << 8) | Buff[7]);
         SERIAL_ECHOLN(calCheck);
         SERIAL_ECHOLN(GetChecksum);
@@ -510,21 +494,18 @@ uint16_t LaserExecuter::GetTimPwm() {
  * change power limit, will be call when open / close chamber door
 */
 void LaserExecuter::ChangePowerLimit(float limit) {
+  float percent = last_percent;
   if (limit > LASER_POWER_NORMAL_LIMIT)
     limit = LASER_POWER_NORMAL_LIMIT;
-
-  // if previous limit is larger than now, need to check need to lower current output
-  if (last_percent > limit) {
-    ChangePower(limit);
-
-    if (GetTimPwm() > last_pwm) {
-      // lower current output
-      CheckFan(last_pwm);
-      TimSetPwm(last_pwm);
-    }
-  }
-
   power_limit_ = limit;
+  // if previous limit is larger than now, need to check need to lower current output
+  ChangePower(last_percent);
+  last_percent = percent;  // recover the value of the normal output
+  
+  if (GetTimPwm() > 0) {
+    // If there is current output, it is equal to the limit output
+    SetLaserPwm(last_pwm);
+  }
 }
 
 /**
@@ -533,14 +514,11 @@ void LaserExecuter::ChangePowerLimit(float limit) {
 void LaserExecuter::ChangePower(float percent) {
   int integer;
   float decimal;
-
+  last_percent = percent;
   if (percent > power_limit_)
     percent = power_limit_;
 
-  last_percent = percent;
   integer = percent;
   decimal = percent - integer;
-
-  last_percent = percent;
   last_pwm = LaserPowerTable[integer] + (LaserPowerTable[integer + 1] - LaserPowerTable[integer]) * decimal;
 }

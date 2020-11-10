@@ -34,6 +34,7 @@ public:
   uint32_t GetPower() { return (uint32_t)(last_percent * 1000.0f); };
   float GetPowerPercent() { return last_percent; }
   uint16_t GetTimPwm();
+  void SetLaserPwm(uint16_t pwm);
   void ChangePower(float percent);
 
   void UpdateLaserPower(float NewPower);

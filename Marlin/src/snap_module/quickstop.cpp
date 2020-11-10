@@ -212,7 +212,17 @@ void QuickStop::TowardStop() {
     break;
 
   case MACHINE_TYPE_CNC:
-    move_to_limited_z(Z_MAX_POS, 20);
+    if (current_position[Z_AXIS] + CNC_SAFE_HIGH_DIFF > Z_MAX_POS) {
+      move_to_limited_z(Z_MAX_POS, 20);
+    } else {
+      move_to_limited_z(current_position[Z_AXIS] + CNC_SAFE_HIGH_DIFF, 20);
+      while (planner.has_blocks_queued()) {
+      if (event_ != QS_EVENT_ISR_POWER_LOSS)
+        idle();
+      }
+      ExecuterHead.CNC.SetPower(0);
+      move_to_limited_z(Z_MAX_POS, 20);
+    }
     break;
 
   default:
